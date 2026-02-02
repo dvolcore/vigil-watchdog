@@ -759,8 +759,14 @@ class TelegramBot:
         if "NO_REPLY" in text.upper() or "HEARTBEAT_OK" in text.upper():
             log.info(f"Filtered spam: {text[:50]}")
             return
-        if "error processing" in text.lower() and text.count("error") > 0:
+        if "error processing" in text.lower():
             log.info(f"Filtered error spam: {text[:50]}")
+            return
+        if "encountered an error" in text.lower():
+            log.info(f"Filtered error message: {text[:50]}")
+            return
+        if "AI error" in text:
+            log.info(f"Filtered AI error: {text[:50]}")
             return
         
         # Rate limiting: max 1 message per 5 seconds
@@ -789,12 +795,21 @@ class TelegramBot:
             return
         
         # Natural language → AI
-        response = await call_ai(text)
-        
-        # Execute embedded commands
-        response = await self.execute_commands(response)
-        
-        await self.send_message(f"🛡️ {response}")
+        try:
+            response = await call_ai(text)
+            
+            # Don't send error responses
+            if not response or "error" in response.lower() or "AI error" in response:
+                log.warning(f"AI returned error: {response}")
+                response = f"I can help with that. Try:\n• /status - system check\n• /today - calendar\n• /tasks - todo list\n• /help - all commands\n\nOr ask Jordan directly for complex questions."
+            
+            # Execute embedded commands
+            response = await self.execute_commands(response)
+            
+            await self.send_message(f"🛡️ {response}")
+        except Exception as e:
+            log.error(f"Error processing message: {e}")
+            # Don't send error to user - silent fail
     
     async def execute_commands(self, response: str) -> str:
         """Execute any embedded commands in AI response."""
