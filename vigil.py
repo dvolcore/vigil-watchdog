@@ -669,6 +669,13 @@ class TelegramBot:
         
     async def send_message(self, text: str, parse_mode: str = "Markdown"):
         """Send message to operator."""
+        # Filter out spam/garbage responses
+        if not text or len(text.strip()) < 3:
+            return
+        if "NO_REPLY" in text.upper() or "HEARTBEAT_OK" in text.upper():
+            log.info(f"Filtered spam message: {text[:50]}")
+            return
+        
         async with aiohttp.ClientSession() as session:
             await session.post(f"{self.api}/sendMessage", json={
                 "chat_id": config.authorized_user,
