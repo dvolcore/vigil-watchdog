@@ -339,17 +339,22 @@ async def tailscale_ping() -> Tuple[bool, float]:
         return False, 0
     
     try:
+        # Use TCP connection check instead of ping (ping not available in Railway)
         start = time.time()
-        proc = await asyncio.create_subprocess_exec(
-            'ping', '-c', '1', '-W', '5', config.mac_tailscale_ip,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        await proc.wait()
-        latency = (time.time() - start) * 1000  # ms
-        return proc.returncode == 0, latency
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(config.mac_tailscale_ip, 22),
+                timeout=5
+            )
+            writer.close()
+            await writer.wait_closed()
+            latency = (time.time() - start) * 1000
+            return True, latency
+        except:
+            # Fallback: just check if we can resolve/reach the IP
+            return False, 0
     except Exception as e:
-        log.error(f"Tailscale ping failed: {e}")
+        # Don't log every time - too noisy
         return False, 0
 
 async def get_best_ssh_ip() -> str:
@@ -825,23 +830,33 @@ _I never sleep. I predict problems._
     
     async def poll(self):
         """Poll for Telegram updates."""
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(
-                    f"{self.api}/getUpdates",
-                    params={"offset": self.last_update_id + 1, "timeout": 30}
-                ) as resp:
-                    data = await resp.json()
-                    
-                    for update in data.get("result", []):
-                        self.last_update_id = update["update_id"]
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+                try:
+                    async with session.get(
+                        f"{self.api}/getUpdates",
+                        params={"offset": self.last_update_id + 1, "timeout": 30}
+                    ) as resp:
+                        data = await resp.json()
                         
-                        if "message" in update and "text" in update["message"]:
-                            text = update["message"]["text"]
-                            from_id = str(update["message"]["from"]["id"])
-                            await self.process_message(text, from_id)
-            except Exception as e:
-                log.error(f"Telegram poll error: {e}")
+                        if not data.get("ok"):
+                            log.error(f"Telegram API error: {data}")
+                            return
+                        
+                        for update in data.get("result", []):
+                            self.last_update_id = update["update_id"]
+                            
+                            if "message" in update and "text" in update["message"]:
+                                text = update["message"]["text"]
+                                from_id = str(update["message"]["from"]["id"])
+                                log.info(f"Received message from {from_id}: {text[:50]}...")
+                                await self.process_message(text, from_id)
+                except asyncio.TimeoutError:
+                    log.warning("Telegram poll timeout - retrying")
+                except Exception as e:
+                    log.error(f"Telegram poll error: {e}")
+        except Exception as e:
+            log.error(f"Telegram session error: {e}")
 
 bot = TelegramBot()
 
