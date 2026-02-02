@@ -669,16 +669,23 @@ class TelegramBot:
         
     async def send_message(self, text: str, parse_mode: str = "Markdown"):
         """Send message to operator."""
-        # EMERGENCY: All messaging disabled until spam bug fixed
-        log.info(f"Message suppressed (emergency): {text[:100]}")
-        return
-        
         # Filter out spam/garbage responses
         if not text or len(text.strip()) < 3:
+            log.info("Filtered: empty message")
             return
         if "NO_REPLY" in text.upper() or "HEARTBEAT_OK" in text.upper():
-            log.info(f"Filtered spam message: {text[:50]}")
+            log.info(f"Filtered spam: {text[:50]}")
             return
+        if "error processing" in text.lower() and text.count("error") > 0:
+            log.info(f"Filtered error spam: {text[:50]}")
+            return
+        
+        # Rate limiting: max 1 message per 5 seconds
+        now = time.time()
+        if hasattr(self, '_last_send') and (now - self._last_send) < 5:
+            log.info(f"Rate limited: {text[:50]}")
+            return
+        self._last_send = now
         
         async with aiohttp.ClientSession() as session:
             await session.post(f"{self.api}/sendMessage", json={
