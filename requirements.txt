@@ -1,2 +1,24 @@
+# VIGIL v5.0 — DVOL LIFE OPERATING SYSTEM
+# Core
 aiohttp>=3.9.0
 asyncssh>=2.14.0
+
+# Google APIs (Calendar, Gmail, Drive)
+google-api-python-client>=2.100.0
+google-auth-httplib2>=0.1.0
+google-auth-oauthlib>=1.1.0
+
+# Database
+aiosqlite>=0.19.0
+
+# Scheduling
+apscheduler>=3.10.0
+
+# Food ordering (future)
+# httpx>=0.25.0
+
+# Financial (Plaid - future)
+# plaid-python>=11.0.0
+
+# SMS backup (Twilio)
+twilio>=8.10.0
