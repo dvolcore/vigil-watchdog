@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  vigil:
+    build: .
+    container_name: vigil-watchdog
+    restart: always
+    ports:
+      - "8765:8765"
+    environment:
+      # Telegram (already configured)
+      - VIGIL_TELEGRAM_TOKEN=8454974123:AAElL8ibPKv6nP8LUBfeTfkDRH9QAfhYAKs
+      - VIGIL_AUTHORIZED_USER=2037643246
+      
+      # Your Mac's info (UPDATE THESE)
+      - MAC_IP=192.168.86.48
+      - MAC_MAC_ADDRESS=  # Get with: networksetup -getmacaddress en0
+      - MAC_SSH_USER=ralphd
+      
+      # AI API (at least one required for intelligence)
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      
+      # Heartbeat settings
+      - HEARTBEAT_TIMEOUT=180  # 3 minutes
+      
+    volumes:
+      - vigil-data:/data/vigil
+      - ~/.ssh/id_rsa:/root/.ssh/id_rsa:ro  # SSH key for Mac access
+    
+    # For Wake-on-LAN to work, need host network on same LAN
+    # network_mode: host  # Uncomment if on same network as Mac
+
+volumes:
+  vigil-data:
