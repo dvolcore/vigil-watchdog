@@ -1011,20 +1011,21 @@ async def main():
     await site.start()
     log.info(f"Heartbeat server listening on port {config.heartbeat_port}")
     
-    # Send startup message
-    await bot.send_message(
-        "🛡️ *VIGIL v4.0 ONLINE*\n\n"
-        "Enhanced external watchdog active.\n"
-        "DVOL v31.1 integrated.\n\n"
-        "✅ Tailscale integration\n"
-        "✅ Predictive maintenance\n"
-        "✅ Multi-channel alerts\n"
-        "✅ Automated recovery\n\n"
-        f"📡 Monitoring: `{config.mac_ip}`\n"
-        f"🔒 Tailscale: `{config.mac_tailscale_ip}`\n"
-        f"⏱️ Timeout: {config.heartbeat_timeout}s\n\n"
-        "_I never sleep. I predict problems._"
-    )
+    # Send startup message - DISABLED to reduce spam
+    # await bot.send_message(
+    #     "🛡️ *VIGIL v4.0 ONLINE*\n\n"
+    #     "Enhanced external watchdog active.\n"
+    #     "DVOL v31.1 integrated.\n\n"
+    #     "✅ Tailscale integration\n"
+    #     "✅ Predictive maintenance\n"
+    #     "✅ Multi-channel alerts\n"
+    #     "✅ Automated recovery\n\n"
+    #     f"📡 Monitoring: `{config.mac_ip}`\n"
+    #     f"🔒 Tailscale: `{config.mac_tailscale_ip}`\n"
+    #     f"⏱️ Timeout: {config.heartbeat_timeout}s\n\n"
+    #     "_I never sleep. I predict problems._"
+    # )
+    log.info("Startup message suppressed")
     state.add_event("startup", "vigil", "Vigil v4.0 started with enhanced capabilities")
     
     # Start monitoring and Telegram polling

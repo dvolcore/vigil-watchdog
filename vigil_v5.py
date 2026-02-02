@@ -1082,16 +1082,18 @@ async def main():
     await site.start()
     log.info(f"Server listening on port {config.heartbeat_port}")
     
-    # Startup message
-    await bot.send_message(
-        "🛡️ *VIGIL v5.0 ONLINE*\n\n"
-        "*DVOL LIFE OPERATING SYSTEM*\n\n"
-        f"• Google: {'✅ Connected' if google.is_ready() else '⚠️ Not configured'}\n"
-        f"• Database: ✅ Ready\n"
-        f"• Monitoring: ✅ Active\n\n"
-        "_Your life OS is ready._\n"
-        "Send /morning for your briefing."
-    )
+    # Startup message - DISABLED to reduce spam during deploys
+    # Uncomment when stable:
+    # await bot.send_message(
+    #     "🛡️ *VIGIL v5.0 ONLINE*\n\n"
+    #     "*DVOL LIFE OPERATING SYSTEM*\n\n"
+    #     f"• Google: {'✅ Connected' if google.is_ready() else '⚠️ Not configured'}\n"
+    #     f"• Database: ✅ Ready\n"
+    #     f"• Monitoring: ✅ Active\n\n"
+    #     "_Your life OS is ready._\n"
+    #     "Send /morning for your briefing."
+    # )
+    log.info("Startup message suppressed (spam prevention)")
     
     # Run loops
     await asyncio.gather(
