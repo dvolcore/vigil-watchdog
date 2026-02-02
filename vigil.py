@@ -669,6 +669,10 @@ class TelegramBot:
         
     async def send_message(self, text: str, parse_mode: str = "Markdown"):
         """Send message to operator."""
+        # EMERGENCY: All messaging disabled until spam bug fixed
+        log.info(f"Message suppressed (emergency): {text[:100]}")
+        return
+        
         # Filter out spam/garbage responses
         if not text or len(text.strip()) < 3:
             return
