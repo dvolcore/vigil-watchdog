@@ -50,7 +50,7 @@ class Config:
     
     # Heartbeat settings
     heartbeat_timeout: int = int(os.getenv("HEARTBEAT_TIMEOUT", "180"))  # 3 minutes
-    heartbeat_port: int = int(os.getenv("HEARTBEAT_PORT", "8765"))
+    heartbeat_port: int = int(os.getenv("PORT", os.getenv("HEARTBEAT_PORT", "8765")))
     
     # Data persistence
     data_dir: str = os.getenv("VIGIL_DATA_DIR", "/data/vigil")
