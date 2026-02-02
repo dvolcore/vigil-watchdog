@@ -674,7 +674,37 @@ When the user asks to do something, figure out the right command and include it.
 # ═══════════════════════════════════════════════════════════════════
 
 async def call_ai(user_message: str) -> str:
-    """Call AI for intelligent responses."""
+    """Call AI for intelligent responses - with smart fallback."""
+    
+    # Smart keyword-based responses (no AI needed)
+    msg_lower = user_message.lower()
+    
+    if any(word in msg_lower for word in ['status', 'health', 'check', 'working']):
+        return f"""*System Status:*
+• Jordan: {state.jordan.status} 
+• Maximus: {state.maximus.status}
+• Mac: {'🟢 AWAKE' if state.mac_awake else '🔴 ASLEEP'}
+
+Use /status for full details."""
+    
+    if any(word in msg_lower for word in ['help', 'command', 'what can you']):
+        return """*Available Commands:*
+• /status - System health
+• /today - Calendar (needs Google setup)
+• /tasks - Todo list
+• /task [text] - Add task
+• /wake - Wake Mac
+• /restart - Restart Jordan
+
+For complex questions, ask Jordan directly via Telegram."""
+    
+    if any(word in msg_lower for word in ['hello', 'hi', 'hey']):
+        return "Hello! I'm Vigil, your external watchdog. I monitor Jordan and Maximus 24/7. Use /help to see what I can do."
+    
+    if any(word in msg_lower for word in ['thank', 'thanks']):
+        return "You're welcome! I'm always watching. 🛡️"
+    
+    # Try AI APIs
     system_state = f"""
 Jordan: {state.jordan.status} (last: {state.jordan.last_seen or 'never'})
 Maximus: {state.maximus.status} (last: {state.maximus.last_seen or 'never'})
@@ -690,11 +720,26 @@ Tasks pending: {len(await db.get_tasks())}
     
     # Try MiniMax first
     if config.minimax_api_key:
-        return await call_minimax(prompt, user_message)
-    elif config.openai_api_key:
-        return await call_openai(prompt, user_message)
-    else:
-        return "⚠️ No AI configured. Use /help for commands."
+        result = await call_minimax(prompt, user_message)
+        if result and "error" not in result.lower():
+            return result
+    
+    # Try OpenAI
+    if config.openai_api_key:
+        result = await call_openai(prompt, user_message)
+        if result and "error" not in result.lower():
+            return result
+    
+    # Final fallback
+    return f"""I understand you asked: "{user_message[:50]}..."
+
+I can help with:
+• /status - Check system health
+• /tasks - View/add todos  
+• /wake - Wake the Mac
+• /help - All commands
+
+For complex questions, message Jordan directly."""
 
 async def call_minimax(system: str, user: str) -> str:
     try:
