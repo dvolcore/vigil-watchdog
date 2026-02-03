@@ -65,6 +65,9 @@ class Config:
     mac_ssh_user: str = os.getenv("MAC_SSH_USER", "ralphd")
     mac_ssh_key: str = os.getenv("MAC_SSH_KEY", "")
     
+    # Cloudflare Tunnel (HTTP gateway to Mac)
+    cloudflare_tunnel_url: str = os.getenv("CLOUDFLARE_TUNNEL_URL", "")
+    
     # Heartbeat settings
     heartbeat_timeout: int = int(os.getenv("HEARTBEAT_TIMEOUT", "180"))
     heartbeat_port: int = int(os.getenv("PORT", os.getenv("HEARTBEAT_PORT", "8765")))
@@ -565,6 +568,48 @@ async def tailscale_ping() -> Tuple[bool, float]:
     except:
         return False, 0
 
+async def cloudflare_tunnel_health() -> Tuple[bool, float, dict]:
+    """Check Jordan/OpenClaw health via Cloudflare Tunnel HTTP endpoint."""
+    if not config.cloudflare_tunnel_url:
+        return False, 0, {}
+    try:
+        start = time.time()
+        url = config.cloudflare_tunnel_url.rstrip('/') + '/health'
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                latency = (time.time() - start) * 1000
+                if resp.status == 200:
+                    data = await resp.json()
+                    return True, latency, data
+                return False, latency, {"status": resp.status}
+    except Exception as e:
+        return False, 0, {"error": str(e)}
+
+async def check_jordan_health() -> Tuple[str, bool, float, dict]:
+    """
+    Check Jordan/OpenClaw health using best available method.
+    Returns: (method, success, latency_ms, details)
+    """
+    # Priority 1: Cloudflare Tunnel (most reliable for cloud->home)
+    if config.cloudflare_tunnel_url:
+        success, latency, details = await cloudflare_tunnel_health()
+        if success:
+            return "cloudflare", True, latency, details
+    
+    # Priority 2: Tailscale (direct mesh, if configured)
+    if config.mac_tailscale_ip:
+        success, latency = await tailscale_ping()
+        if success:
+            return "tailscale", True, latency, {}
+    
+    # Priority 3: SSH (fallback)
+    if config.mac_ssh_key:
+        success, output = await ssh_command("echo ok")
+        if success:
+            return "ssh", True, 0, {"output": output}
+    
+    return "none", False, 0, {"error": "No connectivity method available"}
+
 async def ssh_command(command: str) -> Tuple[bool, str]:
     """Execute command on Mac via SSH."""
     try:
@@ -797,26 +842,36 @@ class TelegramBot:
         self.last_update_id = 0
     
     async def send_message(self, text: str, parse_mode: str = "Markdown"):
-        # Filter out spam/garbage responses
+        # SPAM PREVENTION - filter garbage
         if not text or len(text.strip()) < 3:
             log.info("Filtered: empty message")
             return
-        if "NO_REPLY" in text.upper() or "HEARTBEAT_OK" in text.upper():
-            log.info(f"Filtered spam: {text[:50]}")
-            return
-        if "error processing" in text.lower():
-            log.info(f"Filtered error spam: {text[:50]}")
-            return
-        if "encountered an error" in text.lower():
-            log.info(f"Filtered error message: {text[:50]}")
-            return
-        if "AI error" in text:
-            log.info(f"Filtered AI error: {text[:50]}")
-            return
         
-        # Rate limiting: max 1 message per 5 seconds
+        text_lower = text.lower()
+        spam_phrases = [
+            "no_reply", "heartbeat_ok", "error processing", "encountered an error",
+            "ai error", "try /status", "quick health check", "error:", "exception:",
+            "failed to", "unable to", "cannot process"
+        ]
+        for phrase in spam_phrases:
+            if phrase in text_lower:
+                log.info(f"Filtered spam/error: {text[:50]}")
+                return
+        
+        # Duplicate detection - don't send same message twice in 60s
+        msg_hash = hash(text[:100])
         now = time.time()
-        if hasattr(self, '_last_send') and (now - self._last_send) < 5:
+        if not hasattr(self, '_sent_hashes'):
+            self._sent_hashes = {}
+        # Clean old hashes
+        self._sent_hashes = {k: v for k, v in self._sent_hashes.items() if now - v < 60}
+        if msg_hash in self._sent_hashes:
+            log.info(f"Filtered duplicate: {text[:50]}")
+            return
+        self._sent_hashes[msg_hash] = now
+        
+        # Rate limiting: max 1 message per 10 seconds
+        if hasattr(self, '_last_send') and (now - self._last_send) < 10:
             log.info(f"Rate limited: {text[:50]}")
             return
         self._last_send = now
@@ -839,14 +894,30 @@ class TelegramBot:
             await self.handle_command(text)
             return
         
-        # Natural language → AI
+        # Natural language → AI (with circuit breaker)
         try:
+            # Check AI circuit breaker
+            if not hasattr(self, '_ai_failures'):
+                self._ai_failures = 0
+            if self._ai_failures >= 3:
+                log.warning("AI circuit breaker open - too many failures")
+                # Reset after 5 minutes
+                if hasattr(self, '_ai_breaker_time') and time.time() - self._ai_breaker_time > 300:
+                    self._ai_failures = 0
+                else:
+                    self._ai_breaker_time = time.time()
+                    return  # Silent fail when circuit open
+            
             response = await call_ai(text)
             
-            # Don't send error responses
-            if not response or "error" in response.lower() or "AI error" in response:
+            # Don't send error responses - silent fail
+            if not response or "error" in response.lower():
                 log.warning(f"AI returned error: {response}")
-                response = f"I can help with that. Try:\n• /status - system check\n• /today - calendar\n• /tasks - todo list\n• /help - all commands\n\nOr ask Jordan directly for complex questions."
+                self._ai_failures += 1
+                return  # Don't respond with error
+            
+            # Reset failure count on success
+            self._ai_failures = 0
             
             # Execute embedded commands
             response = await self.execute_commands(response)
@@ -854,7 +925,8 @@ class TelegramBot:
             await self.send_message(f"🛡️ {response}")
         except Exception as e:
             log.error(f"Error processing message: {e}")
-            # Don't send error to user - silent fail
+            self._ai_failures = self._ai_failures + 1 if hasattr(self, '_ai_failures') else 1
+            # Silent fail - never send error messages to user
     
     async def execute_commands(self, response: str) -> str:
         """Execute any embedded commands in AI response."""
@@ -1029,25 +1101,33 @@ bot = TelegramBot()
 async def generate_status() -> str:
     """Generate status message."""
     ts_ok, ts_lat = await tailscale_ping()
+    bot_status = await check_all_bots()
+    
+    jordan_icon = "✅" if bot_status["jordan"]["status"] == "ok" else "❌"
+    maximus_icon = "✅" if bot_status["maximus"]["status"] == "ok" else "❌"
+    tunnel_icon = "✅" if bot_status["tunnel"]["status"] == "connected" else "❌"
+    
+    jordan_lat = f" ({bot_status['jordan']['latency']}ms)" if bot_status["jordan"]["latency"] else ""
     
     return f"""🛡️ *VIGIL v5.0 STATUS*
 
-*Agents:*
-• Jordan: {state.jordan.status} (last: {state.jordan.last_seen or 'never'})
-• Maximus: {state.maximus.status} (last: {state.maximus.last_seen or 'never'})
+*Agents (Live Check):*
+• Jordan: {jordan_icon} {bot_status['jordan']['status']}{jordan_lat}
+• Maximus: {maximus_icon} {bot_status['maximus']['status']}
+• Vigil: ✅ ONLINE
 
 *Infrastructure:*
+• Cloudflare Tunnel: {tunnel_icon}
 • Mac: {'🟢 AWAKE' if state.mac_awake else '🔴 ASLEEP'}
 • Tailscale: {'✅' if ts_ok else '❌'} ({ts_lat:.0f}ms)
 
 *Integrations:*
 • Google: {'✅ Connected' if google.is_ready() else '❌ Not configured'}
 
-*Metrics:*
+*Monitoring:*
+• Bot checks: Every 5 min
 • Heartbeats: {state.metrics.heartbeat_count}
-• Recoveries: {state.metrics.recovery_success}✅ / {state.metrics.recovery_failed}❌
-
-*Vigil:* 🟢 ONLINE v5.0"""
+• Auto-recovery: Enabled"""
 
 # ═══════════════════════════════════════════════════════════════════
 # HTTP SERVER
@@ -1097,12 +1177,85 @@ async def handle_health(request):
 # SCHEDULED TASKS
 # ═══════════════════════════════════════════════════════════════════
 
+async def check_all_bots() -> dict:
+    """Check health of all bots in the system."""
+    results = {
+        "jordan": {"status": "unknown", "latency": 0},
+        "maximus": {"status": "unknown"},
+        "tunnel": {"status": "unknown", "url": ""}
+    }
+    
+    # Check Jordan via Cloudflare tunnel
+    if config.cloudflare_tunnel_url:
+        try:
+            start = time.time()
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    config.cloudflare_tunnel_url,
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    latency = (time.time() - start) * 1000
+                    results["jordan"]["status"] = "ok" if resp.status == 200 else "error"
+                    results["jordan"]["latency"] = round(latency, 2)
+                    results["tunnel"]["status"] = "connected"
+                    results["tunnel"]["url"] = config.cloudflare_tunnel_url
+        except Exception as e:
+            results["jordan"]["status"] = "unreachable"
+            results["tunnel"]["status"] = "down"
+            log.warning(f"Jordan/tunnel check failed: {e}")
+    
+    # Check Maximus bot via Telegram API
+    maximus_token = "8477138186:AAEuI3WvAWMYGhRNU-3IrRCyfZipcl-ILJ8"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://api.telegram.org/bot{maximus_token}/getMe",
+                timeout=aiohttp.ClientTimeout(total=5)
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("ok"):
+                        results["maximus"]["status"] = "ok"
+                        results["maximus"]["username"] = data["result"]["username"]
+    except Exception as e:
+        results["maximus"]["status"] = "error"
+        log.warning(f"Maximus check failed: {e}")
+    
+    return results
+
+_last_bot_check = None
+_bot_check_interval = 300  # 5 minutes
+
 async def scheduler_loop():
     """Run scheduled tasks."""
+    global _last_bot_check
+    
     while True:
         await asyncio.sleep(60)  # Check every minute
         
         now = datetime.now()
+        
+        # Bot monitoring every 5 minutes
+        if _last_bot_check is None or (now - _last_bot_check).total_seconds() >= _bot_check_interval:
+            _last_bot_check = now
+            bot_status = await check_all_bots()
+            
+            # Alert if anything is down
+            alerts = []
+            if bot_status["jordan"]["status"] not in ["ok", "unknown"]:
+                alerts.append(f"❌ Jordan: {bot_status['jordan']['status']}")
+            if bot_status["maximus"]["status"] not in ["ok", "unknown"]:
+                alerts.append(f"❌ Maximus: {bot_status['maximus']['status']}")
+            if bot_status["tunnel"]["status"] == "down":
+                alerts.append(f"❌ Cloudflare Tunnel: DOWN")
+            
+            if alerts:
+                await bot.send_message(
+                    f"🚨 *BOT ALERT*\n\n" + "\n".join(alerts) + 
+                    "\n\n_Attempting recovery..._"
+                )
+            else:
+                log.info(f"Bot check OK: Jordan={bot_status['jordan']['status']}, Maximus={bot_status['maximus']['status']}")
         
         # Morning briefing
         if (now.hour == config.morning_briefing_hour and 
