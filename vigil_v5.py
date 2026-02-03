@@ -787,6 +787,11 @@ I can help with:
 For complex questions, message Jordan directly."""
 
 async def call_minimax(system: str, user: str) -> str:
+    """Call MiniMax API - DISABLED due to error spam. Using fallback only."""
+    # MiniMax was generating error messages - disabled until investigated
+    return None
+
+async def call_minimax_disabled(system: str, user: str) -> str:
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -805,9 +810,14 @@ async def call_minimax(system: str, user: str) -> str:
                 }
             ) as resp:
                 data = await resp.json()
-                return data.get("choices", [{}])[0].get("message", {}).get("content", "AI error")
+                result = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                # Filter out error-like responses
+                if not result or "error" in result.lower() or "encountered" in result.lower():
+                    return None
+                return result
     except Exception as e:
-        return f"AI error: {e}"
+        log.error(f"MiniMax error: {e}")
+        return None
 
 async def call_openai(system: str, user: str) -> str:
     try:
@@ -1167,7 +1177,7 @@ async def handle_heartbeat(request):
 async def handle_health(request):
     return web.json_response({
         "status": "ok",
-        "version": "5.0",
+        "version": "5.2",
         "jordan": state.jordan.status,
         "maximus": state.maximus.status,
         "google": google.is_ready()
